@@ -1,0 +1,35 @@
+
+
+  spring:
+    application:
+      name: product-service
+    datasource:
+      url: jdbc:mysql://localhost:3306/BigBites
+      username: root
+      password: areeb@4821
+      driver-class-name: com.mysql.cj.jdbc.Driver
+
+      jpa:
+        hibernate:
+          ddl-auto: update
+        show-sql: true
+        open-in-view: false
+        properties:
+          hibernate:
+            dialect: org.hibernate.dialect.MySQLDialect
+            jdbc:
+              batch_size: 50
+            order_inserts: true
+
+  management:
+    endpoints:
+      web:
+        exposure:
+          include: health,info,metrics
+    endpoint:
+      health:
+        show-details: always
+
+  logging:
+    level:
+      com.bigbites: DEBUG
