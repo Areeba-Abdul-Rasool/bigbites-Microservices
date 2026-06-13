@@ -5,3 +5,9 @@
 **/mvnw
 **/mvnw.cmd
 **/.DS_Store
+*.pem
+*.csv
+.env
+*accessKeys*
+*credentials*
+*secret*
