@@ -46,4 +46,4 @@ logging:
 # order-service application.yml
 service:
   product:
-    url: http://localhost:8080/
+    url: http://localhost:8082/

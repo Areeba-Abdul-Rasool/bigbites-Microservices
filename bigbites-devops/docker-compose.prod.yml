@@ -1,0 +1,122 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────
+#  BigBites – Production Compose (runs on EC2)
+#  Images come from ECR. RDS & MSK are AWS-managed (not here).
+#  All secrets come from the .env file on the EC2 instance.
+# ─────────────────────────────────────────────────────────────
+
+networks:
+  bigbites-net:
+    driver: bridge
+
+services:
+
+  product-service:
+    image: ${ECR_REGISTRY}/bigbites-product-service:${IMAGE_TAG:-latest}
+    container_name: bigbites-product
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL:      ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASS}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BROKERS}
+      AWS_S3_BUCKET:  ${AWS_S3_BUCKET}
+      AWS_REGION:     ${AWS_REGION}
+      SPRING_PROFILES_ACTIVE: prod
+    networks: [bigbites-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8082/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  order-service:
+    image: ${ECR_REGISTRY}/bigbites-order-service:${IMAGE_TAG:-latest}
+    container_name: bigbites-order
+    restart: unless-stopped
+    depends_on:
+      product-service:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL:      ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASS}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BROKERS}
+      SERVICE_PRODUCT_URL: http://product-service:8082
+      SPRING_PROFILES_ACTIVE: prod
+    networks: [bigbites-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  cart-service:
+    image: ${ECR_REGISTRY}/bigbites-cart-service:${IMAGE_TAG:-latest}
+    container_name: bigbites-cart
+    restart: unless-stopped
+    depends_on:
+      order-service:
+        condition: service_healthy
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_DATASOURCE_URL:      ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASS}
+      SERVICE_PRODUCT_URL: http://product-service:8082
+      SERVICE_ORDER_URL:   http://order-service:8081
+      SPRING_PROFILES_ACTIVE: prod
+    networks: [bigbites-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8085/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  payment-service:
+    image: ${ECR_REGISTRY}/bigbites-payment-service:${IMAGE_TAG:-latest}
+    container_name: bigbites-payment
+    restart: unless-stopped
+    depends_on:
+      order-service:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL:      ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASS}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BROKERS}
+      SERVICE_ORDER_URL: http://order-service:8081
+      SPRING_PROFILES_ACTIVE: prod
+    networks: [bigbites-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8083/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  notification-service:
+    image: ${ECR_REGISTRY}/bigbites-notification-service:${IMAGE_TAG:-latest}
+    container_name: bigbites-notification
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_DATASOURCE_URL:      ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASS}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BROKERS}
+      SPRING_PROFILES_ACTIVE: prod
+    networks: [bigbites-net]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8084/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5

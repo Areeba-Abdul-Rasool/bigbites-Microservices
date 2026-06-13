@@ -1,0 +1,65 @@
+# ─────────────────────────────────────────────────────────────
+#  application-prod.yml  (place in src/main/resources of EACH service)
+#  All sensitive values come from environment variables injected
+#  by EC2 UserData / ECS Task Definition / GitHub Actions secrets.
+# ─────────────────────────────────────────────────────────────
+
+spring:
+  datasource:
+    # AWS RDS MySQL endpoint injected at runtime
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: update          # use 'validate' once tables are stable
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: notification-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+
+# Inter-service URLs (overridden per service)
+service:
+  order:
+    url: ${SERVICE_ORDER_URL:http://order-service:8081}
+  product:
+    url: ${SERVICE_PRODUCT_URL:http://product-service:8082}
+  payment:
+    url: ${SERVICE_PAYMENT_URL:http://payment-service:8083}
+
+feign:
+  client:
+    config:
+      default:
+        connectTimeout: 5000
+        readTimeout: 5000
+
+# AWS S3 (for order receipts / file uploads if needed)
+aws:
+  s3:
+    bucket: ${AWS_S3_BUCKET:bigbites-uploads}
+    region: ${AWS_REGION:ap-south-1}
+
+logging:
+  level:
+    com.bigbites: INFO
+    org.springframework.kafka: WARN

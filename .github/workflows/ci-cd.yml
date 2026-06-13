@@ -1,0 +1,186 @@
+name: BigBites CI/CD Pipeline
+
+# ─────────────────────────────────────────────────────────────
+#  Triggers: push to main (deploy) + PRs (build/test only)
+# ─────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: ap-south-1           # change to your region
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+
+jobs:
+
+  # ─── 1. Detect which services changed ──────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cart:         ${{ steps.filter.outputs.cart }}
+      order:        ${{ steps.filter.outputs.order }}
+      payment:      ${{ steps.filter.outputs.payment }}
+      product:      ${{ steps.filter.outputs.product }}
+      notification: ${{ steps.filter.outputs.notification }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            cart:
+              - 'cart-service/**'
+            order:
+              - 'order-service/**'
+            payment:
+              - 'payment-service/**'
+            product:
+              - 'product-service/**'
+            notification:
+              - 'notification-service/**'
+
+  # ─── 2. Build + Test every changed service ─────────────────
+  build-and-test:
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: cart-service
+            changed: ${{ needs.changes.outputs.cart }}
+            port: 8085
+          - service: order-service
+            changed: ${{ needs.changes.outputs.order }}
+            port: 8081
+          - service: payment-service
+            changed: ${{ needs.changes.outputs.payment }}
+            port: 8083
+          - service: product-service
+            changed: ${{ needs.changes.outputs.product }}
+            port: 8082
+          - service: notification-service
+            changed: ${{ needs.changes.outputs.notification }}
+            port: 8084
+
+    steps:
+      - name: Checkout
+        if: matrix.changed == 'true' || github.event_name == 'push'
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        if: matrix.changed == 'true' || github.event_name == 'push'
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+          cache: maven
+
+      - name: Build & Test – ${{ matrix.service }}
+        if: matrix.changed == 'true' || github.event_name == 'push'
+        run: |
+          cd ${{ matrix.service }}
+          mvn clean verify -B
+
+      - name: Upload test reports
+        if: always() && (matrix.changed == 'true' || github.event_name == 'push')
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.service }}
+          path: ${{ matrix.service }}/target/surefire-reports/
+
+  # ─── 3. Build Docker images & push to ECR ──────────────────
+  docker-push:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [cart-service, order-service, payment-service, product-service, notification-service]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push – ${{ matrix.service }}
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          SERVICE:   ${{ matrix.service }}
+        run: |
+          IMAGE_URI=$ECR_REGISTRY/bigbites-$SERVICE
+
+          docker build \
+            -t $IMAGE_URI:$IMAGE_TAG \
+            -t $IMAGE_URI:latest \
+            -f bigbites-devops/$SERVICE/Dockerfile \
+            $SERVICE/
+
+          docker push $IMAGE_URI:$IMAGE_TAG
+          docker push $IMAGE_URI:latest
+
+          echo "IMAGE_URI=$IMAGE_URI:$IMAGE_TAG" >> $GITHUB_ENV
+
+  # ─── 4. Deploy to EC2 via SSH ──────────────────────────────
+  deploy:
+    needs: docker-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Copy compose file to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host:        ${{ secrets.EC2_HOST }}
+          username:    ec2-user
+          key:         ${{ secrets.EC2_SSH_KEY }}
+          source:      "bigbites-devops/docker-compose.prod.yml"
+          target:      "/home/ec2-user/bigbites"
+
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ec2-user/bigbites
+
+            # Pull new images
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} \
+              | docker login --username AWS --password-stdin \
+                ${{ env.ECR_REGISTRY }}
+
+            export IMAGE_TAG=${{ github.sha }}
+            export ECR_REGISTRY=${{ env.ECR_REGISTRY }}
+
+            # Source env vars from a secured file on the instance
+            set -a; source /home/ec2-user/bigbites/.env; set +a
+
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            # Prune old images to save disk space
+            docker image prune -f
+
+            echo "✅ Deployment complete – $(date)"
