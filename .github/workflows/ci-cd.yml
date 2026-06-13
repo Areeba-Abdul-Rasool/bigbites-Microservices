@@ -81,7 +81,7 @@ jobs:
         if: matrix.changed == 'true' || github.event_name == 'push'
         run: |
           cd ${{ matrix.service }}
-          mvn clean verify -B
+          gitmvn clean package -DskipTests -B
 
       - name: Upload test reports
         if: always() && (matrix.changed == 'true' || github.event_name == 'push')

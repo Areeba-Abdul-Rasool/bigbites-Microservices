@@ -9,7 +9,7 @@
 
 
     datasource:
-      url: jdbc:mysql://localhost:3306/BigBites
+      url: jdbc:mysql://localhost:3306/bigbites
       username: root
       password: areeb@4821
       driver-class-name: com.mysql.cj.jdbc.Driver
